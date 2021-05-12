@@ -860,7 +860,7 @@ on boot
     chown root system /sys/block/zram0/writeback
     chmod 0664 /sys/block/zram0/writeback
 
-    write /proc/sys/vm/max_map_count 524240
+    write /proc/sys/vm/max_map_count 1048576
 
     # Tweak background writeout
     write /proc/sys/vm/dirty_expire_centisecs 200
