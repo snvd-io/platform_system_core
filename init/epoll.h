@@ -22,6 +22,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -39,12 +40,12 @@ class Epoll {
     Result<void> Open();
     Result<void> RegisterHandler(int fd, std::function<void()> handler, uint32_t events = EPOLLIN);
     Result<void> UnregisterHandler(int fd);
-    Result<std::vector<std::function<void()>*>> Wait(
+    Result<std::vector<std::shared_ptr<std::function<void()>>>> Wait(
             std::optional<std::chrono::milliseconds> timeout);
 
   private:
     android::base::unique_fd epoll_fd_;
-    std::map<int, std::function<void()>> epoll_handlers_;
+    std::map<int, std::shared_ptr<std::function<void()>>> epoll_handlers_;
 };
 
 }  // namespace init
