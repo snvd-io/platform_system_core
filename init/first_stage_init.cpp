@@ -163,7 +163,8 @@ std::string GetModuleLoadList(bool recovery, const std::string& dir_path) {
 }
 
 #define MODULE_BASE_DIR "/lib/modules"
-bool LoadKernelModules(bool recovery, bool want_console, bool want_parallel, int& modules_loaded) {
+bool LoadKernelModules(bool recovery, bool want_console, bool want_parallel, bool disable_usb_port,
+                       int& modules_loaded) {
     struct utsname uts;
     if (uname(&uts)) {
         LOG(FATAL) << "Failed to get kernel version.";
@@ -203,7 +204,7 @@ bool LoadKernelModules(bool recovery, bool want_console, bool want_parallel, int
     for (const auto& module_dir : module_dirs) {
         std::string dir_path = MODULE_BASE_DIR "/";
         dir_path.append(module_dir);
-        Modprobe m({dir_path}, GetModuleLoadList(recovery, dir_path));
+        Modprobe m({dir_path}, GetModuleLoadList(recovery, dir_path), true, disable_usb_port);
         bool retval = m.LoadListedModules(!want_console);
         modules_loaded = m.GetModuleCount();
         if (modules_loaded > 0) {
@@ -211,7 +212,7 @@ bool LoadKernelModules(bool recovery, bool want_console, bool want_parallel, int
         }
     }
 
-    Modprobe m({MODULE_BASE_DIR}, GetModuleLoadList(recovery, MODULE_BASE_DIR));
+    Modprobe m({MODULE_BASE_DIR}, GetModuleLoadList(recovery, MODULE_BASE_DIR), true, disable_usb_port);
     bool retval = (want_parallel) ? m.LoadModulesParallel(std::thread::hardware_concurrency())
                                   : m.LoadListedModules(!want_console);
     modules_loaded = m.GetModuleCount();
@@ -328,8 +329,16 @@ int FirstStageMain(int argc, char** argv) {
 
     boot_clock::time_point module_start_time = boot_clock::now();
     int module_count = 0;
-    if (!LoadKernelModules(IsRecoveryMode() && !ForceNormalBoot(cmdline, bootconfig), want_console,
-                           want_parallel, module_count)) {
+
+    const bool recovery = IsRecoveryMode() && !ForceNormalBoot(cmdline, bootconfig);
+    bool disable_usb_port = false;
+    if (!recovery) {
+        bool is_charger = bootconfig.find("androidboot.mode = \"charger\"") != std::string::npos ||
+           cmdline.find("androidboot.mode=charger") != std::string::npos;
+        disable_usb_port = !is_charger;
+    }
+
+    if (!LoadKernelModules(recovery, want_console, want_parallel, disable_usb_port, module_count)) {
         if (want_console != FirstStageConsoleParam::DISABLED) {
             LOG(ERROR) << "Failed to load kernel modules, starting console";
         } else {
