@@ -206,6 +206,9 @@ static void Status(const std::string& message) {
     if (!message.empty()) {
         static constexpr char kStatusFormat[] = "%-50s ";
         fprintf(stderr, kStatusFormat, message.c_str());
+        if (has_flash_capturer()) {
+            fprintf(stderr, "\n");
+        }
     }
     last_start_time = now();
 }
@@ -2997,7 +3000,7 @@ void FlashCapturer::AddFile(const std::string& name, const void* data, size_t le
     if (int ret = output_zip_writer_->GetLastEntry(&entry)) {
         die("AddSparseFileInner: GetLastEntry: %s", ErrorCodeString(ret));
     }
-    std::cerr << "\nFlashCapturer: added " << name << ", "
+    std::cerr << "FlashCapturer: added " << name << ", "
               << size_to_string(entry.uncompressed_size)
               << " (" << size_to_string(entry.compressed_size) << ")\n";
 }
