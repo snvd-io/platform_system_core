@@ -2729,14 +2729,8 @@ static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, u
 
     int bootloader_flash_counter = 0;
     bool added_set_active_a = false;
-    bool skip_next_line = false;
 
     for (std::string& line : lines) {
-        if (skip_next_line) {
-            skip_next_line = false;
-            continue;
-        }
-
         if (!line.starts_with("fastboot ")) {
             continue;
         }
@@ -2767,10 +2761,6 @@ static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, u
             }
             // at() is used intentionally for bounds checking
             std::string& partition = tokens.at(partition_idx);
-            if (partition == "avb_custom_key") {
-                // current flash-all scripts unnecessarily reboot after flashing avb_custom_key
-                skip_next_line = true;
-            }
             std::string& file = tokens.at(file_idx);
 
             if (partition == "bootloader") {
