@@ -1842,6 +1842,7 @@ void FlashAllTool::CheckRequirements() {
     }
     if (auto fc = flash_capturer()) {
         fc->AddFile("android-info.txt", contents.data(), contents.size());
+        fc->AddCommand("check-requirements android-info.txt");
     } else {
         ::CheckRequirements({contents.data(), contents.size()}, fp_->force_flash);
     }
