@@ -2919,6 +2919,7 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
     static_assert(sizeof(uint8_t) == sizeof(char), "unexpected char size");
     std::string flash_all_sh;
     std::string flash_all_bat;
+    std::string product_name;
 
     for (;;) {
         ZipEntry64 entry;
@@ -2941,6 +2942,13 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
         }
 
         if (entry_base_name.starts_with("image-") && entry_base_name.ends_with(".zip")) {
+            size_t product_name_start = strlen("image-");
+            size_t product_name_end = entry_base_name.find("-", product_name_start);
+            if (product_name_end == std::string::npos) {
+                die("product_name_end not found");
+            }
+            product_name = entry_base_name.substr(product_name_start, product_name_end - product_name_start);
+
             if (update_zip != nullptr) {
                 die("more than one update zip");
             }
@@ -3010,6 +3018,10 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
     AddShBatLine("echo Available devices:");
     AddShBatCommand("fastboot devices -l");
 
+    if (product_name.empty()) {
+        die("product_name not set");
+    }
+    AddCheckVarCommand("product", product_name);
     AddCheckVarCommand("slot-count", "2"); // assumed in many places
 
     parse_flash_all_sh(*this, flashing_plan, flash_all_sh);
