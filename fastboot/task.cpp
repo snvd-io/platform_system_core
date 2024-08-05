@@ -309,7 +309,9 @@ WipeTask::WipeTask(const FlashingPlan* fp, const std::string& pname) : fp_(fp), 
 
 void WipeTask::Run() {
     if (auto fc = flash_capturer()) {
-        fc->AddCommand("erase " + pname_);
+        std::string cmd = "erase " + pname_;
+        fc->AddCommand(cmd);
+        fc->AddShBatCommand("fastboot " + cmd);
         return;
     }
 

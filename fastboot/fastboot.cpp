@@ -2722,10 +2722,8 @@ unsigned FastBootTool::ParseFsOption(const char* arg) {
     return fsOptions;
 }
 
-static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, uint8_t* file_contents, size_t file_len) {
-    static_assert(sizeof(uint8_t) == sizeof(char), "unexpected char size");
-    auto contents_str = std::string(reinterpret_cast<char*>(file_contents), file_len);
-    std::vector<std::string> lines = android::base::Split(contents_str, "\n");
+static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, std::string& contents) {
+    std::vector<std::string> lines = android::base::Split(contents, "\n");
 
     int bootloader_flash_counter = 0;
     bool added_set_active_a = false;
@@ -2772,34 +2770,42 @@ static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, u
 
             fc.AddCommand(("flash " + partition).append(" ").append(file)
                                   .append(other_slot ? " other-slot" : ""));
+            fc.AddShBatCommand(line);
         } else if (tokens[1] == "--set-active=other") {
             token_count = 2;
             fc.AddCommand("toggle-active-slot");
+            fc.AddShBatCommand(line);
         } else if (tokens[1] == "reboot-bootloader") {
             token_count = 2;
             fc.AddCommand(tokens[1]);
+            fc.AddShBatCommand(line);
+            fc.AddShLine("sleep 5");
+            fc.AddBatLine("ping -n 5 127.0.0.1 >nul");
             if (bootloader_flash_counter == 2 && !added_set_active_a) {
-                std::stringstream str_stream;
-                str_stream << "check-var max-download-size 0x" << std::hex << flashing_plan->sparse_limit;
                 fc.AddComment("size of partition splits depends on this value");
-                fc.AddCommand(str_stream.str());
+                std::stringstream max_dl_size_hex;
+                max_dl_size_hex << "0x" << std::hex << flashing_plan->sparse_limit;
+                fc.AddCheckVarCommand("max-download-size", max_dl_size_hex.str());
 
                 fc.AddComment("layout of the super partition depends on the current slot, which is hardcoded to slot A");
                 fc.AddCommand("run-cmd set_active:a");
+                fc.AddShBatCommand("fastboot --set-active=a");
                 added_set_active_a = true;
 
-                fc.AddCommand("check-var current-slot a");
+                fc.AddCheckVarCommand("current-slot", "a");
             }
         } else if (tokens[1] == "erase") {
             token_count = 3;
             std::string& partition = tokens.at(2);
             fc.AddCommand("erase " + partition);
+            fc.AddShBatCommand("fastboot erase " + partition);
         } else if (tokens[1] == "snapshot-update") {
             token_count = 3;
             if (tokens.at(2) != "cancel") {
                 die("unexpected flash-all command: %s", line.c_str());
             }
             fc.AddCommand("maybe-cancel-snapshot-update");
+            fc.AddShBatCommand(line);
         } else if (tokens[1] == "oem") {
             auto cmd = std::string("run-cmd");
             for (size_t i = 1; i < tokens.size(); ++i) {
@@ -2807,6 +2813,7 @@ static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, u
             }
             fc.AddCommand(cmd);
             token_count = tokens.size();
+            fc.AddShBatCommand(line);
         }
         else {
             die("unknown flash-all command %s", line.c_str());
@@ -2822,10 +2829,14 @@ static void parse_flash_all_sh(FlashCapturer& fc, FlashingPlan* flashing_plan, u
     }
 }
 
+static void extract_or_die(ZipArchiveHandle zip, ZipEntry64 &entry, std::string& entry_name, uint8_t* dst, size_t len) {
+    if (int ret = ExtractToMemory(zip, &entry, dst, len)) {
+        die("unable to extract %s: %s", entry_name.c_str(), ErrorCodeString(ret));
+    }
+}
+
 void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, std::string& out_path) {
     flashing_plan->wants_wipe = true; // needed for capture of wipe commands
-
-    AddCommand("check-var slot-count 2"); // assumed in several places below
 
     ZipArchiveHandle factory_zip;
     if (int ret = OpenArchive(factory_path.c_str(), &factory_zip)) {
@@ -2847,6 +2858,10 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
 
     ZipArchiveHandle update_zip = nullptr;
 
+    static_assert(sizeof(uint8_t) == sizeof(char), "unexpected char size");
+    std::string flash_all_sh;
+    std::string flash_all_bat;
+
     for (;;) {
         ZipEntry64 entry;
         std::string entry_name;
@@ -2864,10 +2879,6 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
 
         if (entry_base_name.empty()) {
             // entry is a directory
-            continue;
-        }
-
-        if (entry_name.ends_with(".bat") || (entry_name.ends_with(".sh") && entry_base_name != "flash-all.sh")) {
             continue;
         }
 
@@ -2891,21 +2902,27 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
             continue;
         }
 
-        auto contents = new uint8_t[entry.uncompressed_length];
-        size_t contents_len = entry.uncompressed_length;
+        const size_t entry_len = entry.uncompressed_length;
 
-        if (int ret = ExtractToMemory(factory_zip, &entry, contents, contents_len)) {
-            die("unable to extract %s: %s", entry_name.c_str(), ErrorCodeString(ret));
-        }
-
-        if (entry_base_name == "flash-all.sh") {
-            parse_flash_all_sh(*this, flashing_plan, contents, contents_len);
-            verbose("flash-all.sh converted to:\n%s", script_.c_str());
+        if (entry_name.ends_with(".sh")) {
+            if (entry_base_name == "flash-all.sh") {
+                flash_all_sh.resize(entry_len);
+                // sizeof(char) is asserted above
+                extract_or_die(factory_zip, entry, entry_name, reinterpret_cast<uint8_t*>(flash_all_sh.data()), entry_len);
+            } else if (entry_base_name != "flash-base.sh") {
+                die("unknown sh script: %s", entry_name.c_str());
+            }
+        } else if (entry_name.ends_with(".bat")) {
+            if (entry_base_name != "flash-all.bat") {
+                die("unknown bat script: %s", entry_name.c_str());
+            }
+            flash_all_bat.resize(entry_len);
+            extract_or_die(factory_zip, entry, entry_name, reinterpret_cast<uint8_t*>(flash_all_bat.data()), entry_len);
         } else {
-            AddFile(entry_base_name, contents, contents_len);
+            std::vector<uint8_t> contents(entry_len);
+            extract_or_die(factory_zip, entry, entry_name, contents.data(), entry_len);
+            AddFile(entry_base_name, contents.data(), entry_len);
         }
-
-        delete[] contents;
     }
 
     CloseArchive(factory_zip);
@@ -2913,6 +2930,32 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
     if (update_zip == nullptr) {
         die("no update zip");
     }
+    if (flash_all_sh.empty()) {
+        die("no flash-all.sh");
+    }
+    if (flash_all_bat.empty()) {
+        die("no flash-all.bat");
+    }
+
+    size_t flash_all_sh_prolog_end = flash_all_sh.find("\n# PROLOG_END");
+    if (flash_all_sh_prolog_end == std::string::npos) {
+        die("no flash_all_sh_prolog_end");
+    }
+    AddShLine(flash_all_sh.substr(0, flash_all_sh_prolog_end));
+
+    size_t flash_all_bat_prolog_end = flash_all_bat.find("\n:: PROLOG_END");
+    if (flash_all_bat_prolog_end == std::string::npos) {
+        die("no flash_all_bat_prolog_end");
+    }
+    AddBatLine(flash_all_bat.substr(0, flash_all_bat_prolog_end));
+
+    AddShBatLine("echo Available devices:");
+    AddShBatCommand("fastboot devices -l");
+
+    AddCheckVarCommand("slot-count", "2"); // assumed in many places
+
+    parse_flash_all_sh(*this, flashing_plan, flash_all_sh);
+    verbose("flash-all.sh converted to:\n%s", script_.c_str());
 
     flashing_plan->source.reset(new ZipImageSource(update_zip));
     FlashAllTool tool(flashing_plan);
@@ -2926,6 +2969,19 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
     std::cerr << "FlashCapturer: script.txt:\n-------------------------\n"
               << script_ << "-------------------------\n";
 
+    AddFile("flash-all.sh", sh_script_.data(), sh_script_.length());
+    verbose("FlashCapturer: flash-all.sh:\n-------------------------\n"
+            "%s-------------------------\n", sh_script_.c_str());
+
+    AddBatLine(":pakExit\n"
+               "echo Press any key to exit...\n"
+               "pause >nul\n"
+               "exit");
+
+    AddFile("flash-all.bat", bat_script_.data(), bat_script_.length());
+    verbose("FlashCapturer: flash-all.bat:\n-------------------------\n"
+              "%s-------------------------\n", bat_script_.c_str());
+
     if (int32_t ret = output_zip_writer_->Finish()) {
         die("output_zip_writer->Finish, %s", ErrorCodeString(ret));
     }
@@ -2933,7 +2989,7 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
     delete output_zip_writer_;
     output_zip_writer_ = nullptr;
     if (int ret = fclose(output_zip_writer_file_)) {
-        die("fclose, %s", strerror(errno));
+        die("fclose(output_zip_writer_file), %s", strerror(errno));
     }
     output_zip_writer_file_ = nullptr;
 
@@ -2952,7 +3008,9 @@ void FlashCapturer::SetPendingPartitionName(const std::string& part_name) {
     std::string base_partition_name = part_name.substr(0, part_name.length() - 2);
 
     pending_file_name_ = new std::string(base_partition_name + ".img");
-    AddCommand("flash " + base_partition_name + " " + *pending_file_name_);
+    std::string cmd = ("flash " + base_partition_name).append(" ").append(*pending_file_name_);
+    AddCommand(cmd);
+    AddShBatCommand("fastboot " + cmd);
 }
 
 void FlashCapturer::AddPartition(const void* data, size_t len, size_t flags) {
@@ -3036,14 +3094,85 @@ void FlashCapturer::AddSplitSparsePartition(const std::string& name, std::vector
     for (size_t i = 0; i < files.size(); i++) {
         std::string file_name = (name + "_").append(std::to_string(i + 1)).append(".img");
         AddSparseFileInner(files[i].get(), file_name, flags);
-        AddCommand(("flash " + name).append(" ").append(file_name));
+        std::string cmd = ("flash " + name).append(" ").append(file_name);
+        AddCommand(cmd);
+        AddShBatLine(("echo Flashing " + name).append(", ")
+            .append(std::to_string(i + 1)).append("/").append(std::to_string(files.size())));
+        AddShBatCommand("fastboot " + cmd);
     }
 }
 
 void FlashCapturer::AddComment(const std::string& comment) {
     script_.append("# ").append(comment).push_back('\n');
+    AddShBatComment(comment);
 }
 
 void FlashCapturer::AddCommand(const std::string& cmd) {
     script_.append(cmd).push_back('\n');
+}
+
+void FlashCapturer::AddShLine(const std::string &cmd) {
+    sh_script_.append(cmd).push_back('\n');
+}
+
+void FlashCapturer::AddBatLine(const std::string &cmd) {
+    bat_script_.append(cmd).push_back('\n');
+}
+
+void FlashCapturer::AddShBatLine(const std::string &cmd) {
+    AddShLine(cmd);
+    AddBatLine(cmd);
+}
+
+void FlashCapturer::AddShBatCommand(const std::string &cmd) {
+    AddShLine(cmd);
+    AddBatLine(cmd);
+    AddBatLine("if %errorlevel% neq 0 call:pakExit\n");
+}
+
+void FlashCapturer::AddShComment(const std::string &comment) {
+    sh_script_.append("# ").append(comment).push_back('\n');
+}
+
+void FlashCapturer::AddBatComment(const std::string &comment) {
+    bat_script_.append(":: ").append(comment).push_back('\n');
+}
+
+void FlashCapturer::AddShBatComment(const std::string &comment) {
+    AddShComment(comment);
+    AddBatComment(comment);
+}
+
+void FlashCapturer::AddCheckVarCommand(const std::string& name, const std::string& expected_value) {
+    AddCommand(("check-var " + name).append(expected_value));
+
+    std::string sh_name(name);
+    sh_name.erase(std::remove(sh_name.begin(), sh_name.end(), '_'), sh_name.end());
+    sh_name.erase(std::remove(sh_name.begin(), sh_name.end(), '-'), sh_name.end());
+
+    AddShLine(sh_name + "=$(fastboot getvar " + name + " 2>&1 | grep \"" + name + ":\" | cut -d ' ' -f 2)\n"
+              "if ! [ $" + sh_name + " = \"" + expected_value + "\" ]; then");
+    if (name == "product") {
+        AddShLine("  echo Error: this factory image is for " + expected_value
+                  + ", but the name of connected device is $" + sh_name);
+    } else {
+        AddShLine("  echo Error: unexpected value of " + name + " variable: expected " + expected_value
+                  + ", got $" + sh_name);
+    }
+    AddShLine("  exit 1\n"
+              "fi");
+
+    AddBatLine("for /f \"tokens=2\" %%a in ('fastboot getvar " + name + " 2^>^&1 ^| find \"" + name + ":\"') do (\n"
+               "  set \"" + sh_name + "=%%a\"\n"
+               ")\n"
+               "if not \"%" + sh_name + "%\" == \"" + expected_value + "\" (");
+    if (name == "product") {
+        AddBatLine("  echo Error: this factory image is for " + expected_value
+                   + ", but the name of connected device is %" + sh_name + "%");
+    } else {
+        AddBatLine("  echo Error: unexpected value of " + name + " variable: expected " + expected_value
+                   + ", got %" + sh_name + "%");
+    }
+    AddBatLine("  call:pakExit\n"
+               ")");
 }
