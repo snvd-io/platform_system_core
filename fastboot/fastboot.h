@@ -210,6 +210,17 @@ class FlashCapturer {
     void AddCommand(const std::string& cmd);
     void AddComment(const std::string& comment);
 
+    void AddShLine(const std::string& cmd);
+    void AddBatLine(const std::string& cmd);
+    void AddShBatLine(const std::string& cmd);
+    void AddShBatCommand(const std::string& cmd);
+
+    void AddShComment(const std::string& comment);
+    void AddBatComment(const std::string& comment);
+    void AddShBatComment(const std::string& comment);
+
+    void AddCheckVarCommand(const std::string& name, const std::string& expected_value);
+
     const std::map<std::string, std::string> vars_ = {
             {"current-slot", "a"},
             {"has-slot:boot", "yes"},
@@ -253,6 +264,8 @@ class FlashCapturer {
 
     std::string* pending_file_name_{};
     std::string script_;
+    std::string sh_script_;
+    std::string bat_script_;
 
     FILE* output_zip_writer_file_{};
     ZipWriter* output_zip_writer_{};
