@@ -1580,6 +1580,12 @@ void reboot_to_userspace_fastboot() {
 }
 
 static void CancelSnapshotIfNeeded() {
+    if (auto fc = flash_capturer()) {
+        fc->AddCommand("maybe-cancel-snapshot-update");
+        fc->AddShBatCommand("fastboot snapshot-update cancel");
+        return;
+    }
+
     std::string merge_status = "none";
     if (fb->GetVar(FB_VAR_SNAPSHOT_UPDATE_STATUS, &merge_status) == fastboot::SUCCESS &&
         !merge_status.empty() && merge_status != "none") {
@@ -1802,9 +1808,8 @@ void FlashAllTool::Flash() {
         }
 
         DetermineSlot();
-
-        CancelSnapshotIfNeeded();
     }
+    CancelSnapshotIfNeeded();
 
     tasks_ = CollectTasks();
 
