@@ -1851,6 +1851,59 @@ void FlashAllTool::CheckRequirements() {
     if (auto fc = flash_capturer()) {
         fc->AddFile("android-info.txt", contents.data(), contents.size());
         fc->AddCommand("check-requirements android-info.txt");
+
+        // android-info.txt is checked by fastboot only if it's part of an update package, there's no exported fastboot
+        // command for checking it separately. The following sequence generates an empty update package with the
+        // provided android-info.txt
+
+        // aiz stands for android-info.zip
+        int aiz_fd = make_temporary_fd("android-info-zip"); // dies on failure
+        FILE* aiz_file = fdopen(aiz_fd, "wb");
+        if (aiz_file == nullptr) {
+            die("fdopen(android_zip_fd): %s", strerror(errno));
+        }
+        ZipWriter aiz(aiz_file);
+        if (int ret = aiz.StartEntry("fastboot-info.txt", ZipWriter::kCompress)) {
+            die("android_info_zip.StartEntry(fastboot-info): %s", ErrorCodeString(ret));
+        }
+        const char* fastboot_info = "version 1\n";
+        if (int ret = aiz.WriteBytes(fastboot_info, strlen(fastboot_info))) {
+            die("android_info_zip.WriteBytes(fastboot-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.FinishEntry()) {
+            die("android_info_zip.FinishEntry(fastboot-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.StartEntry("android-info.txt", ZipWriter::kCompress)) {
+            die("android_info_zip.StartEntry(android-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.WriteBytes(contents.data(), contents.size())) {
+            die("android_info_zip.WriteBytes(android-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.FinishEntry()) {
+            die("android_info_zip.FinishEntry(android-info): %s", ErrorCodeString(ret));
+        }
+        if (int ret = aiz.Finish()) {
+            die("android_info_zip.Finish(): %s", ErrorCodeString(ret));
+        }
+        int64_t aiz_fd_len = lseek64(aiz_fd, 0L, SEEK_END);
+        if (aiz_fd_len < 0) {
+            die("lseek64(android_info_zip_fd, SEEK_END): %s", strerror(errno));
+        }
+
+        std::vector<uint8_t> android_info_zip_contents(aiz_fd_len);
+        if (!android::base::ReadFullyAtOffset(aiz_fd, android_info_zip_contents.data(), aiz_fd_len, 0)) {
+            die("ReadFully(android_info_zip_fd): %s", strerror(errno));
+        }
+
+        if (fclose(aiz_file) != 0) {
+            die("fclose(android_info_zip_file): %s", strerror(errno));
+        }
+
+        std::string aiz_name = "android-info.zip";
+        fc->AddFile(aiz_name, android_info_zip_contents.data(), android_info_zip_contents.size());
+
+        fc->AddShBatComment("this command only checks android-info.txt requirements, it does not perform an update");
+        fc->AddShBatCommand("fastboot --disable-super-optimization --skip-reboot update " + aiz_name);
     } else {
         ::CheckRequirements({contents.data(), contents.size()}, fp_->force_flash);
     }
