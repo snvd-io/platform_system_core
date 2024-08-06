@@ -2907,7 +2907,8 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
         die("unable to open factory zip: %s", ErrorCodeString(ret));
     }
 
-    output_zip_writer_file_ = fopen(out_path.c_str(), "wb");
+    std::string tmp_out_path = out_path + ".tmp";
+    output_zip_writer_file_ = fopen(tmp_out_path.c_str(), "wb");
     if (output_zip_writer_file_ == nullptr) {
         die("unable to create out file %s: %s", out_path.c_str(), strerror(errno));
     }
@@ -3064,10 +3065,21 @@ void FlashCapturer::Run(FlashingPlan* flashing_plan, std::string& factory_path, 
 
     delete output_zip_writer_;
     output_zip_writer_ = nullptr;
-    if (int ret = fclose(output_zip_writer_file_)) {
-        die("fclose(output_zip_writer_file), %s", strerror(errno));
+#ifndef _WIN32
+    // fflush() is called by output_zip_writer_->Finish() above
+    if (fsync(fileno(output_zip_writer_file_))) {
+        die("fsync(output_zip_writer_file) failed: %s", strerror(errno));
+    }
+#endif
+    if (fclose(output_zip_writer_file_)) {
+        die("fclose(output_zip_writer_file) failed: %s", strerror(errno));
     }
     output_zip_writer_file_ = nullptr;
+
+    // atomically update the output file
+    if (rename(tmp_out_path.c_str(), out_path.c_str())) {
+        die("rename(tmp_out_path, out_path) failed: %s", strerror(errno));
+    }
 
     std::cerr << "path of optimized factory image: " << out_path << '\n';
 }
