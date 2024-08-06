@@ -3214,7 +3214,7 @@ void FlashCapturer::AddShBatComment(const std::string &comment) {
 }
 
 void FlashCapturer::AddCheckVarCommand(const std::string& name, const std::string& expected_value) {
-    AddCommand(("check-var " + name).append(expected_value));
+    AddCommand("check-var " + name + " " + expected_value);
 
     std::string sh_name(name);
     sh_name.erase(std::remove(sh_name.begin(), sh_name.end(), '_'), sh_name.end());
