@@ -207,6 +207,10 @@ class FlashCapturer {
     void AddSplitSparsePartition(const std::string& name, std::vector<SparsePtr>& files, size_t flags = ZipWriter::kCompress);
     void AddFile(const std::string& name, const void* data, size_t len, size_t flags = ZipWriter::kCompress);
 
+    void SetOutputZipOuterDirName(const std::string& name);
+    void StartOutputZipEntry(const std::string& name, size_t flags = ZipWriter::kCompress);
+    void FinishOutputZipEntry();
+
     void AddCommand(const std::string& cmd);
     void AddComment(const std::string& comment);
 
@@ -269,6 +273,7 @@ class FlashCapturer {
 
     FILE* output_zip_writer_file_{};
     ZipWriter* output_zip_writer_{};
+    std::string output_zip_outer_dir_name_;
 };
 
 FlashCapturer* flash_capturer();

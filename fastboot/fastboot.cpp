@@ -569,8 +569,8 @@ static int show_help() {
             "                            Check whether unlocking is allowed (1) or not(0).\n"
             "\n"
             "advanced:\n"
-            " optimize-factory-image FACTORY_ZIP [OUTPUT_ZIP] OUTPUT_ZIP defaults to FACTORY_ZIP\n"
-            "                                                   with \"-opt\" suffix.\n"
+            " optimize-factory-image FACTORY_ZIP OUTPUT_ZIP_OUTER_DIR_NAME [OUTPUT_ZIP]\n"
+            "                            OUTPUT_ZIP defaults to OUTPUT_ZIP_OUTER_DIR_NAME.zip\n"
             " erase PARTITION            Erase a flash partition.\n"
             " format[:FS_TYPE[:SIZE]] PARTITION\n"
             "                            Format a flash partition.\n"
@@ -2513,10 +2513,16 @@ int FastBootTool::Main(int argc, char* argv[]) {
             if (!factory_path.ends_with(".zip")) {
                 die("factory path doesn't end with .zip: %s", factory_path.c_str());
             }
-            std::string out_path = args.empty() ?
-                    factory_path.substr(0, factory_path.length() - 4) + "-opt.zip" :
-                    next_arg(&args);
-            fc->Run(fp.get(), factory_path, out_path);
+            std::string output_zip_outer_dir_name = next_arg(&args);
+            if (output_zip_outer_dir_name.find('/') != std::string::npos) {
+                die("invalid outer dir name");
+            }
+            fc->SetOutputZipOuterDirName(output_zip_outer_dir_name);
+            std::string output_zip_path = args.empty() ?
+                                          output_zip_outer_dir_name + ".zip" :
+                                          next_arg(&args);
+
+            fc->Run(fp.get(), factory_path, output_zip_path);
             fprintf(stderr, "Finished. Total time: %.3fs\n", (now() - start));
             return 0;
         }
@@ -3105,15 +3111,11 @@ static std::string size_to_string(size_t v) {
 }
 
 void FlashCapturer::AddFile(const std::string& name, const void* data, size_t len, size_t flags) {
-    if (int ret = output_zip_writer_->StartEntry(std::string(name), flags)) {
-        die("AddFile: StartEntry: %s", ErrorCodeString(ret));
-    }
+    StartOutputZipEntry(name, flags);
     if (int ret = output_zip_writer_->WriteBytes(data, len)) {
         die("AddFile: WriteBytes: %s", ErrorCodeString(ret));
     }
-    if (int ret = output_zip_writer_->FinishEntry()) {
-        die("AddFile: FinishEntry: %s", ErrorCodeString(ret));
-    }
+    FinishOutputZipEntry();
     ZipWriter::FileEntry entry;
     if (int ret = output_zip_writer_->GetLastEntry(&entry)) {
         die("AddSparseFileInner: GetLastEntry: %s", ErrorCodeString(ret));
@@ -3124,9 +3126,7 @@ void FlashCapturer::AddFile(const std::string& name, const void* data, size_t le
 }
 
 void FlashCapturer::AddSparseFileInner(struct sparse_file *s, const std::string &name, size_t flags) {
-    if (int ret = output_zip_writer_->StartEntry(std::string(name), flags)) {
-        die("collectSparseEntryInner: StartEntry: %s", ErrorCodeString(ret));
-    }
+    StartOutputZipEntry(name, flags);
     auto cb = [](void* priv, const void* buf, size_t len) -> int {
         auto w = static_cast<ZipWriter*>(priv);
         if (int ret = w->WriteBytes(buf, len)) {
@@ -3137,9 +3137,7 @@ void FlashCapturer::AddSparseFileInner(struct sparse_file *s, const std::string 
     if (int ret = sparse_file_callback(s, true, false, cb, output_zip_writer_)) {
         die("AddSparseFileInner: sparse_file_callback: %s", strerror(-ret));
     }
-    if (int ret = output_zip_writer_->FinishEntry()) {
-        die("AddSparseFileInner: FinishEntry: %s", ErrorCodeString(ret));
-    }
+    FinishOutputZipEntry();
     ZipWriter::FileEntry entry;
     if (int ret = output_zip_writer_->GetLastEntry(&entry)) {
         die("AddSparseFileInner: GetLastEntry: %s", ErrorCodeString(ret));
@@ -3169,6 +3167,26 @@ void FlashCapturer::AddSplitSparsePartition(const std::string& name, std::vector
         AddShBatLine(("echo Flashing " + name).append(", ")
             .append(std::to_string(i + 1)).append("/").append(std::to_string(files.size())));
         AddShBatCommand("fastboot " + cmd);
+    }
+}
+
+void FlashCapturer::SetOutputZipOuterDirName(const std::string& name) {
+    if (!output_zip_outer_dir_name_.empty()) {
+        die("output_zip_outer_dir_name is already set");
+    }
+    output_zip_outer_dir_name_ = name;
+}
+
+void FlashCapturer::StartOutputZipEntry(const std::string& name, size_t flags) {
+    std::string path = output_zip_outer_dir_name_ + "/" + name;
+    if (int ret = output_zip_writer_->StartEntry(path, flags)) {
+        die("StartOutputZipEntry(%s): %s", path.c_str(), ErrorCodeString(ret));
+    }
+}
+
+void FlashCapturer::FinishOutputZipEntry() {
+    if (int ret = output_zip_writer_->FinishEntry()) {
+        die("FinishOutputZipEntry: %s", ErrorCodeString(ret));
     }
 }
 
